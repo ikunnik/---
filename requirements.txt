@@ -1,0 +1,11 @@
+# 在 distrobox 容器 roverx1-dev 里已经装好，这里只记录版本要求。
+# dds_middleware_python / dobot_quad_highlevel 请用 SDK 的 wheel 安装：
+#   cd /home/admin/dobot/dobot_quad_sdk-main/dist
+#   pip install dds_middleware_python-0.25.11-cp310-cp310-linux_x86_64.whl
+#   pip install -e ../high_level/python
+
+numpy>=1.21
+grpcio>=1.60
+
+# 红绿灯检测（main.py --traffic-light）需要 OpenCV 解码 JPEG：
+#   pip install opencv-python-headless

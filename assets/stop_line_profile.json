@@ -1,0 +1,25 @@
+{
+  "camera": "camera2",
+  "camera_width": 640,
+  "roi": [
+    0.0,
+    0.6,
+    1.0,
+    0.35
+  ],
+  "hsv_space": "degrees_0_360_s01_v01",
+  "ranges": [
+    [
+      18.0,
+      48.0,
+      0.35,
+      0.45
+    ]
+  ],
+  "min_area_ratio": 0.002,
+  "stop_row": 0.844,
+  "confirm_frames": 3,
+  "confirm_s": 0.2,
+  "stale_s": 0.3,
+  "notes": "camera2 640x480。实测 front_camera201 底边约 0.717，front_camera204（停车位）底边约 0.846；黄线偏橙黄，H 中位数 31-37、p99<=43，S≈0.64-0.78，V≈0.54-0.74。注意：rgb_to_hsv 的 H 是 0-360（不是 OpenCV 的 0-180），18-48 已覆盖实测范围，不要再乘 2。ROI y 0.60-0.95 覆盖 201/204 两种距离。stop_row 取 204 的底边；实际触发建议再提前 0.01-0.02（刹车约 0.54s）。"
+}

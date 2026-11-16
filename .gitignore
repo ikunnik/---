@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+*.so
+
+# 运行数据（体积大，不入库）
+depth_images/
+rgb_images/
+
+# ROS 2 / setuptools build outputs
+build/
+install/
+log/
+dist/
+*.egg-info/

@@ -1,0 +1,31 @@
+{
+  "camera": "camera2",
+  "camera_width": 640,
+  "mode": "single",
+  "roi": [
+    0.0,
+    0.55,
+    1.0,
+    0.4
+  ],
+  "hsv_space": "degrees_0_360_s01_v01",
+  "ranges": [
+    [
+      18.0,
+      48.0,
+      0.35,
+      0.45
+    ]
+  ],
+  "min_pixels": 80,
+  "min_near_pixels": 8,
+  "near_row": 0.9,
+  "far_row": 0.65,
+  "near_band": 0.03,
+  "min_width": 0.25,
+  "max_width": 0.9,
+  "width_near": 0.62,
+  "width_far": 0.42,
+  "min_line_sep": 0.12,
+  "notes": "camera2 640x480 单线跟踪（mode=single）：双线课程已取消，单黄线就是车道中心线，center 直接用黄线本身，不再补 width_near/width_far。near 用线自身最低点、far 向上 0.15，线只在 y0.60~0.66 也能跟。front_camera212 center≈0.510；front_camera213 center≈0.758（左缘小黄块被主簇过滤）；front_camera214 center≈0.438。mode=dual 仅保留旧双线兼容，不再使用。"
+}

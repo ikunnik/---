@@ -1,0 +1,9 @@
+# Copy to a deployment file; replace every topic using camera_inventory output.
+# These names are placeholders, NOT discovered device topics.
+/**:
+  ros__parameters:
+    camera_backend: ros2
+    ros2_depth_topic: /replace_with_depth_topic
+    ros2_rgb_topic: /replace_with_camera0_compressed_topic
+    ros2_camera2_topic: /replace_with_camera2_compressed_topic
+    ros2_camera_startup_timeout_s: 8.0
