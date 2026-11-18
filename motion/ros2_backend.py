@@ -332,6 +332,23 @@ class Ros2MotionBackend:
         else:
             raise RuntimeError(f"ROS2 未实现动作: {cmd.motion_id}")
 
+    def _turn_rate(self, elapsed, remaining, yaw_rate, ramp):
+        """转身角速度：只做起转斜坡，到角度直接停。
+
+        纯 yaw 的四足步态最怕阶跃：ω 从 0 直接跳到 1.0rad/s 时前脚被钉在原地、
+        后躯甩出去（前脚交叉、胸腔下沉），所以起转要斜坡。
+
+        但**不能**按剩余角把 ω 递减到底：底盘原地转身有最小可行转速，指令降到
+        它以下就干脆不迈步，loop 会卡在差几度的位置直到超时（实测 40° 差 7° 卡死）。
+        收尾靠"到角度就发零速 + settle"，不靠减速。
+        """
+        if remaining <= float(self.cfg.ros2_turn_stop_deg) * math.pi / 180.0:
+            return 0.0
+        if ramp <= 0:
+            return yaw_rate
+        # 从 15% 起转：留一点初始速度，否则 t=0 时 ω=0 会被当成"已到达"。
+        return yaw_rate * min(1.0, max(0.15, elapsed / ramp))
+
     def _run_rotation(self, cmd: Motion, cancel):
         params = dict(cmd.params)
         direction = int(params.get("direction", 0))
@@ -342,14 +359,28 @@ class Ros2MotionBackend:
         if yaw0 is None:
             raise RuntimeError("ROS2 旋转失败：没有里程计/SDK 姿态")
         yaw_rate = abs(float(self.cfg.ros2_yaw_rate))
+        ramp = max(1e-3, float(self.cfg.ros2_turn_ramp_s))
         sign = 1.0 if direction == 0 else -1.0
-        self._set_target(0.0, 0.0, sign * yaw_rate)
-        timeout = max(5.0, angle / yaw_rate + 3.0)
+        # 比决策层的 turn_timeout_s 短：自己先报"转了多少度"的明确失败，
+        # 而不是被上层当成超时打断（两者都是 5s 时会互相抢）。
+        timeout = max(2.5, angle / yaw_rate + 2.0 + ramp)
         deadline = time.monotonic() + timeout
+        started = time.monotonic()
         yaw_prev = yaw0
         turned = 0.0
+        last_rate = -1.0
+        # 底盘原地转身有最小可行转速：指令偏小时它干脆不迈步（实测 0.5rad/s
+        # 40° 转了 4.85s 还没转完）。这里按实测角速度闭环放大指令。
+        gain = 1.0
+        gain_max = max(1.0, float(self.cfg.ros2_turn_boost_max))
+        win_s = max(0.05, float(self.cfg.ros2_turn_boost_step_s))
+        win_ts = started + ramp   # 斜坡期间本来就慢，别误判成"跟不上"
+        win_turned = 0.0
+        achieved = 0.0
+        last_log = started
         try:
             while True:
+                now = time.monotonic()
                 if cancel.is_set():
                     raise MotionCancelled()
                 yaw = self._yaw()
@@ -357,16 +388,44 @@ class Ros2MotionBackend:
                     # 逐帧累加，支持 circle() 的 360°（单次差值会被 wrap 成 0）
                     turned += _wrap_pi(yaw - yaw_prev)
                     yaw_prev = yaw
-                    if abs(turned) >= angle:
-                        return
-                if time.monotonic() >= deadline:
+                remaining = angle - abs(turned)
+                if remaining <= 0.0:
+                    break
+                rate = self._turn_rate(now - started, remaining,
+                                       yaw_rate * gain, ramp)
+                if rate <= 0.0:
+                    break
+                if abs(rate - last_rate) >= 1e-3:
+                    self._set_target(0.0, 0.0, sign * rate)
+                    last_rate = rate
+                if now - win_ts >= win_s:
+                    achieved = (abs(turned) - win_turned) / (now - win_ts)
+                    win_ts, win_turned = now, abs(turned)
+                    if achieved < 0.5 * rate and gain < gain_max:
+                        gain = min(gain_max, gain * 1.4)
+                        last_rate = -1.0   # 下一轮立刻按新指令下发
+                        logging.warning(
+                            "[ROS2] 转身跟不上：指令 %.2f 实测 %.2f rad/s，"
+                            "放大到 %.2f", rate, achieved, yaw_rate * gain,
+                        )
+                if now - last_log >= 0.5:
+                    last_log = now
+                    logging.info(
+                        "[ROS2] 转身 目标 %.0f° 指令 %.2f 实测 %.2f rad/s 已转 %.1f°",
+                        math.degrees(angle), rate, achieved,
+                        math.degrees(abs(turned)),
+                    )
+                if now >= deadline:
                     raise RuntimeError(
                         f"ROS2 旋转超时：目标 {math.degrees(angle):.0f}°，"
-                        f"已转 {math.degrees(abs(turned)):.0f}°"
+                        f"已转 {math.degrees(abs(turned)):.1f}°"
+                        f"（指令 {yaw_rate * gain:.2f}rad/s）"
                     )
                 time.sleep(0.02)
         finally:
             self._set_target(0.0, 0.0, 0.0)
+        # 转身到位后等步态真正落稳，否则紧接着的下一动作会踩在半空中。
+        self._wait(float(self.cfg.ros2_turn_settle_s), cancel)
 
     def _run_line(self, cmd: Motion, cancel):
         params = dict(cmd.params)

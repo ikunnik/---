@@ -61,6 +61,32 @@ class StopLineAlignTest(unittest.TestCase):
         line = StopLineState(True, 0.9, 100.0, 0.02, (0, 0, 10, 10), 0.5)
         self.assertFalse(seq._needs_align(100.0, line))
 
+    def test_light_opens_at_stop_line_not_after_align(self):
+        import threading
+        active = threading.Event()
+        seq = TrafficSequence(CFG, active, AvoidStateMachine(CFG))
+        seq.active, seq.phase, seq.progress_ts = True, "LINE", 100.0
+        line = StopLineState(True, 0.9, 100.0, 0.02, (0, 0, 10, 10), 6.0)
+        step = seq._step_line(100.0, line, None, False)
+        self.assertEqual(step.request.kind, "stop")
+        self.assertEqual(seq.phase, "AT_LINE")
+        self.assertTrue(active.is_set())      # 到线即开，不等停稳/对齐
+
+    def test_no_extra_settle_after_align(self):
+        seq = TrafficSequence(CFG, None, AvoidStateMachine(CFG))
+        seq.active, seq.phase, seq.stop_ts = True, "AT_LINE", 100.0
+        seq._align_attempts = 1
+        line = StopLineState(True, 0.9, 100.0, 0.02, (0, 0, 10, 10), 6.0)
+        seq._step_at_line(100.0, line)
+        self.assertEqual(seq.phase, "SIGNAL")
+
+    def test_first_stop_still_settles(self):
+        seq = TrafficSequence(CFG, None, AvoidStateMachine(CFG))
+        seq.active, seq.phase, seq.stop_ts = True, "AT_LINE", 100.0
+        line = StopLineState(True, 0.9, 100.0, 0.02, (0, 0, 10, 10), 6.0)
+        seq._step_at_line(100.0, line)
+        self.assertEqual(seq.phase, "AT_LINE")
+
     def test_align_action_completes_back_to_at_line(self):
         seq = TrafficSequence(CFG, None, AvoidStateMachine(CFG))
         line = StopLineState(True, 0.9, 100.0, 0.02, (0, 0, 10, 10), 6.0)

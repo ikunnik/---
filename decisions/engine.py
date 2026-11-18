@@ -16,7 +16,7 @@ from decisions.traffic import TrafficSequence, WAIT_STOP_LINE
 from decisions.types import GO, StepResult
 from decisions.uturn import UTurnController
 
-LANE_HELP_DELAY_S = 8.0  # 识别盲道播报后多久停车呼救
+LANE_HELP_DELAY_S = 10.0  # 识别盲道播报后多久停车呼救
 
 
 @dataclass(frozen=True)

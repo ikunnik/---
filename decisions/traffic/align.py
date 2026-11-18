@@ -15,7 +15,9 @@ class AlignMixin:
     def _step_at_line(self, now, line) -> StepResult:
         if self.phase == ALIGN:
             return self._stop(now)
-        if now - self.stop_ts < self.cfg.stop_settle_s:
+        # 只有第一次（真正停下后）需要等停稳；对齐转向本身已经停过并落稳，
+        # 再等一遍 stop_settle_s 只是白等。
+        if self._align_attempts == 0 and now - self.stop_ts < self.cfg.stop_settle_s:
             return self._stop(now)
         if self._needs_align(now, line):
             return self._start_align(now, line)

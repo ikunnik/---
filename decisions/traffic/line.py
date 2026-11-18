@@ -25,8 +25,16 @@ class LineMixin:
             self.phase = AT_LINE
             self.stop_ts = now
             self._action = None
+            # 红绿灯识别立刻打开，与"停稳 + 对齐"并行跑：否则绿灯还要再等
+            # stop_settle_s + 对齐 + confirm_frames/confirm_s 才能进 PASS。
+            opened = False
+            if self.traffic_active is not None:
+                opened = not self.traffic_active.is_set()
+                self.traffic_active.set()
+                self._traffic_opened = True
             logging.info(
-                "[停止线序列] 到停止线 row=%.3f，停车", line.row
+                "[停止线序列] 到停止线 row=%.3f，停车（红绿灯识别已开启=%s）",
+                line.row, opened,
             )
             return self._stop(
                 now, interrupt=True,

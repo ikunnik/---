@@ -617,6 +617,12 @@ BYPASS_DIAGONAL_M = 0.8
 
 左右空间判断仍使用 `min_passage_m`、`wall_near_ratio`、`wall_extra_m`。
 
+固定角度不够时（障碍近、张角大：0.45m 宽的牌在 0.7m 处约 35°，40° 转完后中心锥体
+仍被它的边缘切到，最近 5% 像素的距离一直是 0.66m），会在**同一侧**追加
+`bypass_angle_step_deg`（默认 15°）再看一次，累计不超过 `bypass_angle_max_deg`
+（默认 75°）。达到上限才把这一侧记成"已试"并回正复核另一侧——旧实现是第一次
+净空不足就放弃该侧，两侧试完直接锁定停车。
+
 ## 参数（`config.py`）
 
 | 参数 | 默认 | 含义 |
@@ -631,7 +637,12 @@ BYPASS_DIAGONAL_M = 0.8
 | `ros2_odom_topic` | `/foot_odom/data` | ROS 2 里程计（距离/角度闭环） |
 | `ros2_rate_hz` | 20.0 | Twist 发布频率 |
 | `ros2_line_vx` | 0.40 | ROS 2 距离移动速度 m/s |
-| `ros2_yaw_rate` | 1.0 | ROS 2 旋转角速度 rad/s |
+| `ros2_yaw_rate` | 0.80 | ROS 2 旋转角速度 rad/s（1.0 时 40° 只有 2 个步态周期，前脚会交叉；≤0.5 底盘不迈步） |
+| `ros2_turn_ramp_s` | 0.30 | 转身起转斜坡 s（不按剩余角减速，否则会卡在差几度） |
+| `ros2_turn_stop_deg` | 0.35 | 转身到位容差 deg |
+| `ros2_turn_settle_s` | 0.20 | 转身到位后停稳时间 s |
+| `ros2_turn_boost_max` | 1.5 | 实测角速度跟不上时最多把指令放大到几倍 |
+| `ros2_turn_boost_step_s` | 0.25 | 角速度闭环取样窗口 s |
 | `ros2_min_vx` | 0.30 | 速度死区（低于它抬到 0.3） |
 | `ros2_odom_stale_s` | 0.5 | 里程计过期时间 |
 | `ros2_cancel_zero_delay_s` | 0.15 | 取消后无新目标才补零速 |
@@ -654,12 +665,12 @@ BYPASS_DIAGONAL_M = 0.8
 | `traffic_stall_s` | 4.0 | 黄线无进展/丢失多久后锁存停车；深度持续失效多久后交回避障 |
 | `traffic_stall_row` | 0.02 | 认为“有进展”的最小行号增量 |
 | `stop_line_trigger_row` | 0.83 | 黄线底边到该行号触发停车 |
-| `stop_settle_s` | 0.25 | 停稳后再开红绿灯识别 |
+| `stop_settle_s` | 0.25 | 停稳后再开始对齐/判定（红绿灯识别已在到线时开启） |
 | `stop_line_align_enabled` | True | 到停止线后按黄线倾角微调 yaw |
 | `stop_line_align_threshold_deg` | 2.0 | 倾角超过它才对齐 |
 | `stop_line_align_max_deg` | 12.0 | 单次对齐最大转角 |
 | `stop_line_align_gain` | 1.5 | 倾角转角的放大倍数 |
-| `stop_line_align_max_attempts` | 2 | 最多对齐次数 |
+| `stop_line_align_max_attempts` | 1 | 最多对齐次数（每次都是一段转身，绿灯前白等） |
 | `stop_line_align_sign` | 1.0 | 方向反了就改 -1 |
 | `traffic_pass_m` | 2.0 | 绿灯后先走的 line_walk 距离（0=直接找障碍） |
 | `traffic_pass_timeout_s` | 10.0 | 2m 动作等待结果超时 |
@@ -714,6 +725,8 @@ BYPASS_DIAGONAL_M = 0.8
 | `min_bypass_advance_m` | 0.90 | 回正后沿原方向绕出的初始目标距离 |
 | `bypass_step_max_m` | 0.40 | 旧配置兼容保留，已不再用于绕障 |
 | `bypass_step_min_m` | 0.10 | 净空不足最小步长时重规划 |
+| `bypass_angle_step_deg` | 15.0 | 斜向净空不足时同侧追加的转角 |
+| `bypass_angle_max_deg` | 75.0 | 单侧累计最大转角（还受 `max_heading_dev` 约束） |
 | `bypass_timeout_s` | 120.0 | 本次绕障总时限，含等待与播报 |
 | `bypass_max_replans` | 8 | 重规划上限 |
 | `bypass_pose_stale_s` | 0.50 | 平面位置及航向新鲜度 |

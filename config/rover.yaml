@@ -10,7 +10,12 @@
     ros2_odom_topic: /foot_odom/data
     ros2_rate_hz: 20.0
     ros2_line_vx: 0.4
-    ros2_yaw_rate: 1.0
+    ros2_yaw_rate: 0.8
+    ros2_turn_ramp_s: 0.3
+    ros2_turn_stop_deg: 0.35
+    ros2_turn_settle_s: 0.2
+    ros2_turn_boost_max: 1.5
+    ros2_turn_boost_step_s: 0.25
     ros2_min_vx: 0.3
     ros2_odom_stale_s: 0.5
     ros2_startup_timeout_s: 8.0
@@ -70,7 +75,7 @@
     stop_line_align_threshold_deg: 2.0
     stop_line_align_max_deg: 30.0
     stop_line_align_gain: 1.7
-    stop_line_align_max_attempts: 2
+    stop_line_align_max_attempts: 1
     stop_line_align_sign: 1.0
     traffic_pass_m: 1.5
     traffic_pass_timeout_s: 10.0
@@ -135,6 +140,8 @@
     bypass_lateral_verify_m: 0.1
     bypass_lateral_max_retry: 2
     bypass_angle_deg: 40.0
+    bypass_angle_step_deg: 15.0
+    bypass_angle_max_deg: 75.0
     max_avoid_cycles: 24
     max_bypass_distance_m: 6.0
     min_bypass_advance_m: 0.3

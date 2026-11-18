@@ -43,12 +43,21 @@ class LateralTargetTests(unittest.TestCase):
                 out = sm._step_plan(context(center=0.71, left=left, right=right, near=0.86))
                 self.assertEqual(dict(out.request.cmd.params)["direction"], expected)
 
-    def test_short_right_diagonal_checks_left_from_original_position(self):
+    def test_short_right_diagonal_escalates_then_checks_left_from_original_position(self):
         sm = AvoidStateMachine(CFG)
         sm._step_plan(context(center=0.71, left=1.25, right=1.60, near=0.86))
         sm.heading_dev_deg = -CFG.bypass_angle_deg
-        turned = context(center=1.31, yaw=math.radians(sm.heading_dev_deg))
-        self.assertEqual(sm._check_after_turn(turned).request.kind, "realign")
+        out = None
+        for _ in range(10):
+            # 0.66m 处有一张宽牌：任何转角下斜向都塞不进去，追加到上限才放弃
+            turned = context(center=0.66, yaw=math.radians(sm.heading_dev_deg))
+            out = sm._check_after_turn(turned)
+            if out.request is None or out.request.kind != "turn":
+                break
+            sm.pending = None        # 追加转角已下发；模拟旋转达成
+            sm.heading_dev_deg -= CFG.bypass_angle_step_deg
+            self.assertEqual(sm.tried_angles, set())
+        self.assertEqual(out.request.kind, "realign")
         self.assertEqual(sm.tried_angles, {-1})
         aligned = context(center=0.71, left=1.25, right=1.60)
         left = sm._step_plan(aligned)
@@ -56,7 +65,7 @@ class LateralTargetTests(unittest.TestCase):
         self.assertEqual(sm._check_after_turn(context()).request.kind, "advance")
 
     def test_probe_after_right_failure_with_logged_left_reading(self):
-        for center, expected in [(3.0, "advance"), (1.12, "realign")]:
+        for center, expected in [(3.0, "advance"), (1.12, "turn")]:
             with self.subTest(center=center):
                 sm = AvoidStateMachine(CFG, wait_for_voice=True)
                 sm.tried_angles.add(-1)
@@ -70,9 +79,10 @@ class LateralTargetTests(unittest.TestCase):
                 if expected == "advance":
                     self.assertEqual(out.voice.side, "left")
                 else:
-                    self.assertEqual(sm.tried_angles, {-1, 1})
-                    self.assertEqual(sm._step_plan(context(center=0.70, left=0.70,
-                                                          right=1.43, near=0.82)).state, "BLOCKED")
+                    # 探测方向塞不下整段斜向：先同侧追加转角，不立刻放弃这一侧
+                    self.assertAlmostEqual(dict(out.request.cmd.params)["angle"],
+                                           CFG.bypass_angle_step_deg)
+                    self.assertEqual(sm.tried_angles, {-1})
 
     def test_probe_excluded_after_translation_or_with_tight_rotation_space(self):
         for moved, left in [(0.37, 0.70), (0.0, 0.18), (0.0, 0.45)]:

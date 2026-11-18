@@ -25,7 +25,12 @@ class Config:
     ros2_odom_topic: str = "/foot_odom/data"
     ros2_rate_hz: float = 20.0          # Twist 发布频率
     ros2_line_vx: float = 0.40          # line_walk 距离移动速度 m/s
-    ros2_yaw_rate: float = 1.0          # 旋转角速度 rad/s
+    ros2_yaw_rate: float = 0.8          # 旋转角速度 rad/s（1.0 时 40° 只够 2 个步态周期，腿会交叉；0.5 底盘不迈步）
+    ros2_turn_ramp_s: float = 0.30      # 起转加速/收尾减速的斜坡时间 s
+    ros2_turn_stop_deg: float = 0.35    # 到位容差，避免收尾时无限微调
+    ros2_turn_settle_s: float = 0.20    # 到位后停稳时间，等步态落地再返回成功
+    ros2_turn_boost_max: float = 1.5    # 实测角速度跟不上时最多把指令放大到几倍
+    ros2_turn_boost_step_s: float = 0.25  # 角速度闭环的取样窗口 s
     ros2_min_vx: float = 0.30           # 速度死区，低于它抬到 0.3
     ros2_odom_stale_s: float = 0.50     # 里程计过期时间
     ros2_startup_timeout_s: float = 8.0 # 等 /planner/vel_cmd 订阅者
@@ -103,7 +108,7 @@ class Config:
     stop_line_align_threshold_deg: float = 2.0 # 倾角达到2°才回正
     stop_line_align_max_deg: float = 30.0  # 单次最大回正角度
     stop_line_align_gain: float = 1.7    # 实测倾角偏小，乘一点再转
-    stop_line_align_max_attempts: int = 2
+    stop_line_align_max_attempts: int = 1  # 对齐只做一次：每次都是一段转身，绿灯前白等
     stop_line_align_sign: float = 1.0     # 方向反了就改 -1
     traffic_pass_m: float = 1.5           # 绿灯后先按 line_walk 前进（米），0=直接找障碍
     traffic_pass_timeout_s: float = 10.0  # 2m 通过动作等待结果的上限
@@ -192,6 +197,11 @@ class Config:
     # 斜向转角：45° 时斜向航段本身就是朝障碍前角切过去的，横向加长也擦角；
     # 60° 把同样的横向偏移压缩到更短的前进量，离前角更远。
     bypass_angle_deg: float = 40.0    # 绕障固定转角（60° 太大，绕出去离原路线太远）
+    # 固定转角不够就同侧追加：0.45m 宽的牌在 0.7m 处张角约 35°，40° 转完后中心
+    # 锥体仍被牌边切到（距离取最近 5% 像素），净空判据永不满足 → 旧逻辑直接把
+    # 这一侧记成"已试"，两侧试完就锁定停车，而另一侧其实是空的。
+    bypass_angle_step_deg: float = 15.0  # 斜向净空不足时同侧追加的转角
+    bypass_angle_max_deg: float = 75.0   # 单侧累计最大转角（同时受 max_heading_dev 约束）
     max_avoid_cycles: int = 24       # 单次绕障的距离动作上限（含回切与中断）
     max_bypass_distance_m: float = 6.0  # 单次绕障累计实际路程上限，包含回切（3.0 会卡在长障碍中途锁死）
     min_bypass_advance_m: float = 0.30  # 回正后并肩前进的初始目标距离（场地短，走多会越过停止线）

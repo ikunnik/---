@@ -4,7 +4,7 @@ import math
 from actions import MAX_DISTANCE
 from dataclasses import replace
 
-from decisions.types import ADVANCE, CHECK, HOLD, RETURN, PendingAction, StepResult
+from decisions.types import ADVANCE, CHECK, HOLD, RETURN, TURN, PendingAction, StepResult
 
 
 class NavigationMixin:
@@ -26,9 +26,10 @@ class NavigationMixin:
         self.return_clear_origin = None
 
     # ------------------------------------------------------------ 侧向偏移几何
-    def _diagonal_from_lateral(self, lateral: float) -> float:
+    def _diagonal_from_lateral(self, lateral: float,
+                               angle_deg: float | None = None) -> float:
         """由横向偏移目标反算斜向路径长度：lateral / sin(转角)。"""
-        angle = float(self.cfg.bypass_angle_deg)
+        angle = float(self.cfg.bypass_angle_deg if angle_deg is None else angle_deg)
         sin_a = max(0.1, math.sin(math.radians(angle)))
         return max(float(self.cfg.bypass_step_min_m), float(lateral) / sin_a)
 
@@ -155,8 +156,51 @@ class NavigationMixin:
         self.phase = CHECK
         return StepResult(CHECK, request, interrupt=True, log="路径出现障碍，停车后重新观察")
 
+    def _escalate_bypass_angle(self, ctx):
+        """斜向起点净空不足：同侧加大转角再看一次，而不是立刻放弃这一侧。
+
+        障碍近、张角大时（0.45m 牌在 0.7m 处约 35°），固定 40° 转完后中心锥体
+        仍被它的边缘切到，_safe_step 永远算出 0；旧逻辑直接 realign 并把该侧写进
+        tried_angles，两侧都试完就锁定停车——明明另一侧是空的。
+        """
+        cfg = self.cfg
+        if self._bypass_stage != "diagonal" or self.bypass_distance_m > 0.0:
+            return None
+        if self.bypass_lateral_sign == 0.0 or not self._pose_valid(ctx.pose, ctx.now):
+            return None
+        sign = 1.0 if self.bypass_lateral_sign > 0 else -1.0
+        step = sign * float(cfg.bypass_angle_step_deg)
+        angle = abs(self.heading_dev_deg)
+        total = angle + abs(step)
+        if abs(step) < 1e-6 or total > float(cfg.bypass_angle_max_deg):
+            return None
+        if abs(self.heading_dev_deg + step) > float(cfg.max_heading_dev):
+            return None
+        # 横向目标不变，转角越大斜向段越短（前进量变小，离障碍前角更远）。
+        lateral = self.diagonal_remaining * math.sin(math.radians(angle))
+        request = self.actions.turn(
+            step, purpose=f"斜向净空不足，同侧追加 {abs(step):.0f}°"
+        )
+        self.pending = PendingAction(
+            kind="turn",
+            tag=request.cmd.tag,
+            started_ts=ctx.now,
+            timeout_s=cfg.turn_timeout_s,
+            expected_yaw_delta_deg=step,
+            start_yaw_rad=ctx.pose.yaw_rad,
+        )
+        self.diagonal_remaining = self._diagonal_from_lateral(lateral, total)
+        self.phase = TURN
+        return StepResult(TURN, request, log=(
+            f"斜向净空只有 {ctx.perception.distance_m:.2f}m，同侧追加 "
+            f"{abs(step):.0f}°（累计 {total:.0f}°）"
+        ))
+
     def _replan(self, ctx, reason):
         self.return_clear_origin = None
+        escalated = self._escalate_bypass_angle(ctx)
+        if escalated is not None:
+            return escalated
         if self.replans >= self.cfg.bypass_max_replans:
             return self._block(ctx.now, "绕障重规划次数达到上限", True, "max_cycles")
         self.replans += 1
