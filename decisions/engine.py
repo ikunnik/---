@@ -16,6 +16,8 @@ from decisions.traffic import TrafficSequence, WAIT_STOP_LINE
 from decisions.types import GO, StepResult
 from decisions.uturn import UTurnController
 
+LANE_HELP_DELAY_S = 8.0  # 识别盲道播报后多久停车呼救
+
 
 @dataclass(frozen=True)
 class DecisionInput:
@@ -56,6 +58,7 @@ class DecisionEngine:
         )
         self._lane_avoiding = False
         self._lane_announced = False
+        self._lane_help_due = None
 
     def start(self, now):
         """决策线程启动时初始化避障状态；不重置盲道测试时钟。"""
@@ -94,7 +97,16 @@ class DecisionEngine:
         notices = ()
         if lane_seen(self.cfg, data.lane, data.now) and not self._lane_announced:
             self._lane_announced = True
+            self._lane_help_due = data.now + LANE_HELP_DELAY_S
             notices = (VoiceCue(kind='lane', reason='lane_recognized'),)
+        if self._lane_help_due is not None and data.now >= self._lane_help_due:
+            self._lane_help_due = None
+            notices += (VoiceCue(kind='help'),)
+            # 停车锁存并呼救；不再进入避障。
+            return DecisionOutput(
+                self.lane.halt(data.now), 'lane',
+                clear_pending=True, notices=notices,
+            )
         clear_pending = False
         if self._lane_avoiding:
             step = self._avoid(data)

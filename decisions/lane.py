@@ -1,4 +1,4 @@
-"""盲道行为：数据守卫、无盲道直行、测试锁停和方案 4 纠偏。"""
+"""盲道行为：数据守卫、无盲道直行、测试锁停和循环 PD 纠偏。"""
 import math
 
 from actions import Actions
@@ -8,7 +8,11 @@ from decisions.types import PendingAction, StepResult
 
 
 class LaneFollower:
-    """稳定循环纠偏：持续计算PD目标，达到阈值才取消并重发循环序列。"""
+    """稳定循环纠偏：持续计算PD目标，达到阈值才取消并重发循环序列。
+
+    纠偏环的时间常数（约 0.4rad/s）比一次控制段（1.2s）慢得多，所以重发节奏
+    必须按"角速度变化量"触发，不能按固定间隔：间隔过长等于开环走斜。
+    """
 
     def __init__(self, cfg):
         self.cfg = cfg
@@ -16,10 +20,9 @@ class LaneFollower:
         self._pending: PendingAction | None = None
         self._center = None
         self._heading = 0.0
-        self._filtered_error = None
+        self._frame_ts = None      # 已经并入 _center/_heading 的检测帧时间戳
+        self._ctrl_ts = None       # 上一次微分用的检测帧时间戳
         self._prev_error = None
-        self._prev_ts = None
-        self._last_vyaw = 0.0
         self._last_stop_ts = -1e9
         self._last_log_ts = -1e9
         self._one_line_side = None
@@ -30,6 +33,7 @@ class LaneFollower:
         self._pending_replan_since = None
         self._no_line_mode = False
         self._no_line_since = None
+        self._halted = False  # 呼救停车后不再恢复
 
     @property
     def trial_finished(self):
@@ -48,15 +52,19 @@ class LaneFollower:
         self._pending = None
         self._center = None
         self._heading = 0.0
-        self._filtered_error = None
+        self._frame_ts = None
+        self._ctrl_ts = None
         self._prev_error = None
-        self._prev_ts = None
-        self._last_vyaw = 0.0
         self._one_line_side = None
         self._active_vyaw = 0.0
         self._pending_replan_since = None
         self._no_line_mode = False
         self._no_line_since = None
+
+    def halt(self, now: float) -> StepResult:
+        """外部要求立即停车并锁存（呼救场景，重启程序才能恢复）。"""
+        self._halted = True
+        return self._stop(now, interrupt=True, log="已停止行走，等待人工帮助")
 
     def _straight_without_line(self, now, result, interrupt=False):
         """图像健康但没有盲道：零横移、零转向，沿当前朝向前进。"""
@@ -101,7 +109,6 @@ class LaneFollower:
 
     def _stop(self, now, interrupt=False, log=None) -> StepResult:
         self._pending = None
-        self._last_vyaw = 0.0
         self._pending_replan_since = None
         self._active_vyaw = 0.0
         if interrupt or (now - self._last_stop_ts) >= self.cfg.stop_refresh_s:
@@ -128,8 +135,29 @@ class LaneFollower:
             return self._stop(now, interrupt=True, log="盲道速度指令超时")
         return StepResult("LANE_WAIT")
 
-    def _control(self, now, center, heading, confidence):
-        """返回平滑限幅后的 yaw 角速度（rad/s）。"""
+    def _track(self, lane: LaneState):
+        """把检测结果并入跟踪值：只在拿到新帧时动，50Hz 重复同一帧不重复积分。
+
+        限跳挡住检测跳变，EMA 压住逐帧抖动；两者都按帧算，才有滤波意义。
+        """
+        if self._center is None or self._frame_ts is None:
+            self._center = lane.center
+            self._heading = lane.heading_deg
+            self._frame_ts = lane.ts
+            return
+        if lane.ts == self._frame_ts:
+            return
+        alpha = float(self.cfg.lane_filter_alpha)
+        max_c = float(self.cfg.lane_max_center_jump)
+        dc = lane.center - self._center
+        self._center += alpha * max(-max_c, min(max_c, dc))
+        max_h = float(self.cfg.lane_max_heading_jump_deg)
+        dh = lane.heading_deg - self._heading
+        self._heading += alpha * max(-max_h, min(max_h, dh))
+        self._frame_ts = lane.ts
+
+    def _control(self, now, center, heading, frame_ts):
+        """返回限幅限速后的 yaw 角速度（rad/s）。"""
         center_ref = float(getattr(self.cfg, "lane_center_ref", 0.5))
         cross_error = center - center_ref
 
@@ -137,47 +165,45 @@ class LaneFollower:
         heading_weight = float(self.cfg.lane_heading_weight)
         error = cross_error + heading_weight * (heading / 30.0)
 
-        alpha = float(self.cfg.lane_filter_alpha)
-        if self._filtered_error is None:
-            filtered = error
-        else:
-            filtered = alpha * error + (1.0 - alpha) * self._filtered_error
-        self._filtered_error = filtered
-
-        dt = 0.0 if self._prev_ts is None else max(1e-3, min(0.25, now - self._prev_ts))
+        # 微分只在检测帧更新时算一次；50Hz 对同一帧求导只会把噪声放大成脉冲。
         derivative = 0.0
-        if self._prev_error is not None and dt > 0:
-            derivative = (filtered - self._prev_error) / dt
-        self._prev_error = filtered
-        self._prev_ts = now
+        if self._ctrl_ts is not None and frame_ts > self._ctrl_ts:
+            derivative = (error - self._prev_error) / (frame_ts - self._ctrl_ts)
+        self._prev_error = error
+        self._ctrl_ts = frame_ts
 
         deadband = float(self.cfg.lane_cross_deadband)
-        if abs(filtered) <= deadband:
+        if abs(error) <= deadband:
             proportional = 0.0
         else:
-            proportional = math.copysign(abs(filtered) - deadband, filtered)
+            proportional = math.copysign(abs(error) - deadband, error)
 
-        target = (
+        target = float(self.cfg.lane_steer_sign) * (
             float(self.cfg.lane_kp) * proportional
             + float(self.cfg.lane_kd) * derivative
         )
-        target *= float(self.cfg.lane_steer_sign)
         limit = float(self.cfg.lane_max_yaw_rate)
         target = max(-limit, min(limit, target))
 
-        # 角速度变化率限制，避免相邻控制段突然反向。
-        max_delta = float(self.cfg.lane_yaw_accel_limit) * max(
-            dt, float(self.cfg.lane_control_duration_s)
-        )
-        delta = max(-max_delta, min(max_delta, target - self._last_vyaw))
-        output = self._last_vyaw + delta
-        self._last_vyaw = output
-        return output, cross_error
+        # 限速对象是"已经下发的角速度"，不是内部累加值：
+        # 否则内部值早就跑到目标上，限速形同虚设，指令仍是阶跃。
+        elapsed = float(self.cfg.lane_control_duration_s)
+        if self._pending is not None:
+            elapsed = max(0.0, now - self._pending.started_ts)
+        max_delta = float(self.cfg.lane_yaw_accel_limit) * elapsed
+        delta = max(-max_delta, min(max_delta, target - self._active_vyaw))
+        return self._active_vyaw + delta, cross_error
 
     def step(self, now: float, lane: LaneState | None,
              perception: Perception | None, perception_ts: float,
              pose: Pose | None, result: CommandResult | None,
              executor_busy: bool) -> StepResult:
+        if self._halted:
+            return self._stop(
+                now, interrupt=self._pending is not None,
+                log=self._maybe_log(now, "已停止行走，等待人工帮助"),
+            )
+
         fresh = lane_fresh(self.cfg, lane, now)
         if not fresh:
             return self._stop(
@@ -254,26 +280,10 @@ class LaneFollower:
             # 同一条RPC循环行走；仅显著且持续的偏差才取消重发。
 
         # 单线模式下 center 就是黄线本身；双线/单边兼容仍使用检测中心。
-        target_center = lane.center
-        target_heading = lane.heading_deg
-
-        # 对感知量做限跳 + EMA，降低光照、反光和聚类变化造成的摆动。
-        if self._center is None:
-            self._center = target_center
-            self._heading = target_heading
-        else:
-            dc = target_center - self._center
-            max_c = float(self.cfg.lane_max_center_jump)
-            target_center = self._center + max(-max_c, min(max_c, dc))
-            self._center = 0.75 * self._center + 0.25 * target_center
-
-            dh = target_heading - self._heading
-            max_h = float(self.cfg.lane_max_heading_jump_deg)
-            target_heading = self._heading + max(-max_h, min(max_h, dh))
-            self._heading = 0.75 * self._heading + 0.25 * target_heading
+        self._track(lane)
 
         vyaw, cross_error = self._control(
-            now, self._center, self._heading, lane.confidence
+            now, self._center, self._heading, lane.ts
         )
         vx = float(self.cfg.lane_forward_vx)
         if self._pending is not None:
@@ -314,5 +324,3 @@ class LaneFollower:
                 f"heading={self._heading:+.1f}° conf={lane.confidence:.2f}",
             ),
         )
-
-

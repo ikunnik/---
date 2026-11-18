@@ -515,7 +515,8 @@ def test_voice_cues():
     done = [v for v in sim.voices if v.kind == "bypass_done"]
     check("完整避障产生绕行提示", ok and len(bypass) == 1, f"{sim.voices}")
     check("左侧空间大时选左", bool(bypass) and bypass[0].side == "left")
-    check("绕行角度 45°", bool(bypass) and abs(bypass[0].angle_deg - 45) < 1e-6,
+    check("绕行角度与配置一致",
+          bool(bypass) and abs(bypass[0].angle_deg - cfg.bypass_angle_deg) < 1e-6,
           f"{bypass}")
     check("完成提示只播一次", len(done) == 1, f"{done}")
 
@@ -593,9 +594,13 @@ def test_voice_cues():
     check("绕行方向用提示优先级",
           priority_name(VoiceCue("bypass", side="left", angle_deg=30)) == "kPROMPT")
     check("识别盲道播报文案",
-          render_text(VoiceCue("lane")) == "继续前进。")
+          render_text(VoiceCue("lane")) == "已识别前方盲道，请跟随我。")
     check("识别盲道播报文件",
           voice_file_name(VoiceCue("lane")) == "lane.wav")
+    check("呼救播报文案",
+          render_text(VoiceCue("help")) == "快来人，帮帮我，快来人，帮帮我")
+    check("呼救播报文件",
+          voice_file_name(VoiceCue("help")) == "help.wav")
 
 
 def test_voice_pack():
@@ -634,6 +639,7 @@ def test_voice_pack():
         VoiceCue("traffic_red"),
         VoiceCue("traffic_yellow"),
         VoiceCue("traffic_green"),
+        VoiceCue("help"),
     ]
     cues.extend(VoiceCue("blocked", reason=r) for r in BLOCKED_TEXT)
     cues.extend(VoiceCue("wait", reason=r) for r in WAIT_TEXT)
@@ -1062,8 +1068,8 @@ def test_avoid_sequence_integration():
         cfg, robot, perception, feeder, feeder_stop
     )
 
-    left_tag = actions.rotate_left(45).tag
-    right_tag = actions.rotate_right(45).tag
+    left_tag = actions.rotate_left(cfg.bypass_angle_deg).tag
+    right_tag = actions.rotate_right(cfg.bypass_angle_deg).tag
     step_tag = actions.move_forward(0.8).tag
 
     def wait_count(tag, n=1, timeout=4.0):
@@ -1111,8 +1117,8 @@ def test_voice_routing_integration():
         cfg, robot, perception, feeder, feeder_stop, voice_queue=voice_queue
     )
 
-    left_tag = actions.rotate_left(45).tag
-    right_tag = actions.rotate_right(45).tag
+    left_tag = actions.rotate_left(cfg.bypass_angle_deg).tag
+    right_tag = actions.rotate_right(cfg.bypass_angle_deg).tag
     step_tag = actions.move_forward(0.8).tag
 
     def wait_count(tag, n=1, timeout=4.0):
@@ -1166,7 +1172,7 @@ def test_voice_ack_integration():
         voice_queue=voice_queue, voice_done_queue=voice_done_queue,
     )
 
-    left_tag = actions.rotate_left(45).tag
+    left_tag = actions.rotate_left(cfg.bypass_angle_deg).tag
     cue = None
     try:
         deadline = time.time() + 4.0

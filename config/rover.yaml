@@ -3,7 +3,7 @@
 /**:
   ros__parameters:
     robot_ip: 192.168.5.2:50051
-    dds_config: /home/admin/dobot/dobot_quad_sdk-main/low_level/python/config/dds_config.yaml
+    dds_config: /home/ikun/Documents/rover_x1_v7.5/assets/dds_config.yaml
     dds_uri_file: ~/dobot_quad_sdk-main/cyclonedds.xml
     motion_backend: ros2
     ros2_vel_topic: /planner/vel_cmd
@@ -39,17 +39,17 @@
     lane_control_duration_s: 1.2
     lane_trial_seconds: 0.0
     lane_batch_steps: 2
-    lane_loop_update_threshold: 0.12
-    lane_loop_min_update_s: 2.5
+    lane_loop_update_threshold: 0.02
+    lane_loop_min_update_s: 0.22
     lane_loop_heartbeat_timeout_s: 1.0
     lane_min_confidence: 0.15
-    lane_filter_alpha: 0.25
-    lane_cross_deadband: 0.018
+    lane_filter_alpha: 0.5
+    lane_cross_deadband: 0.008
     lane_heading_weight: 0.08
     lane_kp: 0.8
     lane_kd: 0.02
     lane_max_yaw_rate: 0.18
-    lane_yaw_accel_limit: 0.12
+    lane_yaw_accel_limit: 0.3
     lane_max_center_jump: 0.06
     lane_max_heading_jump_deg: 6.0
     lane_steer_sign: -1.0
@@ -57,7 +57,7 @@
     lane_reacquire_enabled: true
     lane_reacquire_yaw_rate: 0.12
     lane_reacquire_seconds: 3.0
-    stop_line_stale_s: 0.5
+    stop_line_stale_s: 1.5
     stop_line_startup_timeout_s: 8.0
     stop_line_frame_timeout_s: 5.0
     traffic_vx: 0.4
@@ -82,7 +82,7 @@
     speed_ratio: 60
     pose_timeout_s: 0.3
     pose_cache_s: 0.05
-    danger_m: 0.7
+    danger_m: 0.85
     clear_m: 1.0
     stale_s: 0.5
     min_valid_pixels: 50
@@ -123,31 +123,48 @@
     max_forward_vx: 0.6
     max_heading_dev: 90.0
     min_passage_m: 0.7
+    bypass_side_tie_m: 0.15
     wall_near_ratio: 0.6
-    wall_extra_m: 0.2
+    wall_extra_m: 0.12
     rotate_clear_m: 0.2
     safety_buffer_m: 0.1
+    body_half_width_m: 0.18
+    obstacle_half_width_m: 0.15
+    bypass_side_clearance_m: 0.1
+    bypass_lateral_min_m: 0.35
+    bypass_lateral_verify_m: 0.1
+    bypass_lateral_max_retry: 2
+    bypass_angle_deg: 40.0
     max_avoid_cycles: 24
     max_bypass_distance_m: 6.0
-    min_bypass_advance_m: 0.8
+    min_bypass_advance_m: 0.3
     bypass_step_min_m: 0.1
     bypass_timeout_s: 120.0
     bypass_max_replans: 8
     bypass_pose_stale_s: 0.5
     bypass_min_progress_ratio: 0.5
     path_return_enabled: true
-    path_return_tolerance_m: 0.12
-    path_return_angle_deg: 60.0
-    path_return_clearance_m: 0.4
+    path_return_tolerance_m: 0.16
+    path_return_angle_deg: 40.0
+    path_return_clearance_m: 0.25
     path_return_min_step_m: 0.1
     path_return_max_step_m: 1.5
     path_return_max_attempts: 6
     max_realign_attempts: 12
     settle_s: 0.25
     confirm_s: 0.5
-    stable_delta_m: 0.05
+    stable_delta_m: 0.08
     stable_near_delta: 0.05
     approach_m: 1.2
+    approach_drop_m: 0.15
+    approach_ego_tol_m: 0.06
+    approach_min_frames: 3
+    approach_confirm_n: 2
+    approach_settle_s: 3.0
+    perception_recover_s: 1.5
+    perception_recover_attempts: 3
+    recover_backoff_m: 0.9
+    recover_backoff_step_m: 0.25
     turn_timeout_s: 5.0
     step_timeout_s: 3.0
     realign_timeout_s: 5.0

@@ -35,6 +35,13 @@ class AvoidBase:
         self.check_mode = ""
         self.last_stop_cmd_ts = -1e9
         self.last_dynamic_warn_ts = -1e9
+        self.dynamic_hits = 0
+        self.dynamic_until = 0.0
+        self.last_approach_info = (0.0, 0.0)
+        self.hold_clean_ts = 0.0
+        self.invalid_since = 0.0
+        self.recover_attempts = 0
+        self.last_valid_m = float("inf")
         self.last_pose_warn_ts = -1e9
         self.blocked_since = 0.0
         self.history = deque()
@@ -73,6 +80,13 @@ class AvoidBase:
         self.check_mode = ""
         self.last_stop_cmd_ts = -1e9
         self.last_dynamic_warn_ts = -1e9
+        self.dynamic_hits = 0
+        self.dynamic_until = 0.0
+        self.last_approach_info = (0.0, 0.0)
+        self.hold_clean_ts = 0.0
+        self.invalid_since = 0.0
+        self.recover_attempts = 0
+        self.last_valid_m = float("inf")
         self.last_pose_warn_ts = -1e9
         self.blocked_since = 0.0
         self.history.clear()

@@ -93,13 +93,15 @@ def render_text(cue: VoiceCue) -> str:
     if cue.kind == "traffic_green":
         return "绿灯，可以通行。"
     if cue.kind == "lane":
-        return "继续前进。"
+        return "已识别前方盲道，请跟随我。"
+    if cue.kind == "help":
+        return "快来人，帮帮我，快来人，帮帮我"
     return ""
 
 
 def priority_name(cue: VoiceCue) -> str:
     """DDS VoicePriority 名称：停车/动态障碍用警告，绕行方向用提示。"""
-    if cue.kind in ("blocked", "dynamic", "traffic_red", "traffic_yellow"):
+    if cue.kind in ("blocked", "dynamic", "traffic_red", "traffic_yellow", "help"):
         return "kWarning"
     if (
         cue.kind == "wait"
@@ -137,6 +139,8 @@ def voice_file_name(cue: VoiceCue) -> str:
         return "traffic_green.wav"
     if cue.kind == "lane":
         return "lane.wav"
+    if cue.kind == "help":
+        return "help.wav"
     return ""
 
 

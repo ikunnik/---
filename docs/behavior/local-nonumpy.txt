@@ -1,0 +1,12 @@
+[check] 语法编译
+[check] 默认配置一致性
+Traceback (most recent call last):
+  File "<PATH>", line 28, in <module>
+    main()
+    ~~~~^^
+  File "<PATH>", line 17, in main
+    expected = render_defaults()
+  File "<PATH>", line 19, in render_defaults
+    import yaml
+ModuleNotFoundError: No module named 'yaml'
+[check] 失败 (1): python3 tools/generate_ros_config.py --check

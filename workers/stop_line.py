@@ -41,6 +41,135 @@ def load_profile(path) -> dict:
     return data
 
 
+# ---------------------------------------------------------------- 形状门
+# 立体黄色障碍（锥桶、水马、路沿、黄箱）与地面停止线在 HSV 上高度重叠，
+# 单靠颜色阈值治不了：收紧到能滤掉锥桶的程度，真线也会一起丢。
+# 唯一稳定的区分是形状 —— 停止线是「细长的横向带」。
+#
+# 判据必须旋转不变。机器人航向偏斜时停止线在图像里会变斜，若用 bbox
+# 宽高比判断，倾斜 20° 就足以让真线被误杀（bbox 高度会暴涨 3 倍，
+# 而 shape 本身没变）。所以这里用 PCA 的主轴长 / 次轴厚：
+# 这两个量是刚体量，不随图像内旋转变化。
+DEFAULT_SHAPE = {
+    "enabled": True,
+    "elongation_min": 6.0,       # 主轴长/次轴厚：真线 40+，锥桶≈1.8，水马≈1.9
+    "length_ratio_min": 0.45,    # 主轴长/ROI 宽：线要横贯视场
+    "thickness_ratio_max": 1.0,  # 次轴厚/ROI 高：默认不设限，近处真线会很厚
+    "angle_max_deg": 45.0,       # 与水平夹角上限，防止把竖杆当横线
+    "full_row_frac": 0.8,        # 判定「全宽行」的连续长度门槛
+    "full_rows_min": 3,          # 至少要有几行接近全宽
+}
+
+
+def _shape_metrics(xs, ys, roi_w, roi_h):
+    """旋转不变的形状指标；点数太少无法判断时返回 None（由调用方拒绝）。"""
+    if xs.size < 8:
+        return None
+    pts = np.column_stack((xs, ys)).astype(np.float64)
+    centered = pts - pts.mean(axis=0)
+    try:
+        _, vectors = np.linalg.eigh(centered.T @ centered)
+    except np.linalg.LinAlgError:
+        return None
+    major = vectors[:, -1]          # 主轴（线延伸方向）
+    minor = vectors[:, 0]           # 次轴（线的厚度方向）
+    along = centered @ major
+    across = centered @ minor
+    length = float(along.max() - along.min())
+    thickness = float(across.max() - across.min())
+    angle = math.degrees(math.atan2(float(major[1]), float(major[0])))
+    if angle > 90.0:
+        angle -= 180.0
+    elif angle < -90.0:
+        angle += 180.0
+    return {
+        "length": length,
+        "thickness": thickness,
+        "elongation": length / max(thickness, 1.0),
+        "length_ratio": length / max(float(roi_w), 1.0),
+        "thickness_ratio": thickness / max(float(roi_h), 1.0),
+        "angle": angle,
+    }
+
+
+def _full_rows(mask, roi_w, frac=0.8) -> int:
+    """「连续黄色接近 ROI 全宽」的行数。
+
+    停止线横贯整个视场，而任何障碍物（除非贴脸挡满视野）都做不到让某一行
+    的连续黄色占到 80% 以上。这条判据专治「障碍物与停止线在图像里粘连」：
+    此时两者的点云连成一片，PCA 伸长比被拽到 4 左右，只有按行看才分得开。
+    """
+    thr = frac * float(roi_w)
+    count = 0
+    for runs in _row_runs(mask):
+        if runs and max(e - s for s, e in runs) >= thr:
+            count += 1
+    return count
+
+
+def _shape_ok(metrics, shape) -> bool:
+    """通路 A：细长 + 横贯 + 不过厚 + 不竖立。
+
+    四条都用 PCA 旋转不变量，航向偏斜不会误杀；通路 B（全宽行）在
+    detect_stop_line 里单独判，两条是并列关系，不是与关系。
+    """
+    if metrics is None:
+        return False
+    return (
+        metrics["elongation"] >= float(shape["elongation_min"])
+        and metrics["length_ratio"] >= float(shape["length_ratio_min"])
+        and metrics["thickness_ratio"] <= float(shape["thickness_ratio_max"])
+        and abs(metrics["angle"]) <= float(shape["angle_max_deg"])
+    )
+
+
+def _row_runs(mask):
+    """每行连续 True 段 [(x_start, x_end_exclusive), ...]，向量化提取。"""
+    pad = np.zeros((mask.shape[0], mask.shape[1] + 2), dtype=np.int8)
+    pad[:, 1:-1] = mask
+    diff = np.diff(pad, axis=1)
+    rs, cs = np.nonzero(diff == 1)
+    _, ce = np.nonzero(diff == -1)
+    out = [[] for _ in range(mask.shape[0])]
+    for r, s, e in zip(rs.tolist(), cs.tolist(), ce.tolist()):
+        out[r].append((s, e))
+    return out
+
+
+def _connected_regions(mask, min_pixels=60):
+    """按「相邻行 x 区间重叠」把 mask 拆成空间区域。
+
+    必须拆，不能对整张 mask 做一次 PCA：黄牌和真停止线同时落在 ROI 里时，
+    合并点云的主轴会被扯成斜向，实测伸长比从 58 掉到 4.2 —— 真停止线
+    被判掉，机器狗会直接冲过路口。分开逐区域判定才能既滤掉黄牌、又保住真线。
+    """
+    rows = _row_runs(mask)
+    active = []      # [x0, x1, y0, y1, pixels, 本行被延续]
+    done = []
+    for y, runs in enumerate(rows):
+        for s, e in runs:
+            for reg in active:
+                if not reg[5] and s <= reg[1] and e >= reg[0]:
+                    reg[0] = min(reg[0], s)
+                    reg[1] = max(reg[1], e)
+                    reg[3] = y
+                    reg[4] += e - s
+                    reg[5] = True
+                    break
+            else:
+                active.append([s, e, y, y, e - s, True])
+        alive = []
+        for reg in active:
+            if reg[5]:
+                reg[5] = False
+                alive.append(reg)
+            else:
+                done.append(reg)
+        active = alive
+    done.extend(active)
+    return [(r[0], r[1], r[2], r[3], r[4]) for r in done if r[4] >= min_pixels]
+
+
 # ---------------------------------------------------------------- 检测
 def _crop(img: np.ndarray, roi):
     h, w = img.shape[:2]
@@ -70,29 +199,57 @@ def detect_stop_line(rgb: np.ndarray, profile: dict,
         return StopLineState(False, 0.0, ts, ratio)
 
     ys, xs = np.nonzero(mask)
-    # 黄线近边/底边：越靠近机器人，row 越大
-    row = (y0 + int(ys.max()) + 1) / float(full_h)
     bbox = (
         int(xs.min()), int(ys.min()),
         int(xs.max() - xs.min() + 1), int(ys.max() - ys.min() + 1),
     )
-    # PCA 主方向：黄线在图像里的倾角。机器人航向与停止线不垂直时，
-    # 横线会变斜；把这个角度交给 TrafficSequence 在停车后微调 yaw。
-    angle = 0.0
-    if len(xs) >= 8:
-        points = np.column_stack((xs, ys)).astype(np.float64)
-        points -= points.mean(axis=0)
-        try:
-            _, vectors = np.linalg.eigh(points.T @ points)
-            vx, vy = vectors[:, -1]
-            angle = math.degrees(math.atan2(float(vy), float(vx)))
-            if angle > 90.0:
-                angle -= 180.0
-            elif angle < -90.0:
-                angle += 180.0
-        except Exception:
-            angle = 0.0
-    return StopLineState(True, row, ts, ratio, bbox, angle)
+    shape = {**DEFAULT_SHAPE, **(profile.get("shape") or {})}
+
+    if not shape.get("enabled", True):
+        # 形状门关闭：完全退回旧行为，保证现场可一键回滚。
+        metrics = _shape_metrics(xs, ys, crop.shape[1], crop.shape[0])
+        angle = metrics["angle"] if metrics else 0.0
+        row = (y0 + int(ys.max()) + 1) / float(full_h)
+        return StopLineState(True, row, ts, ratio, bbox, angle)
+
+    # 逐区域判定：任一区域像停止线就算看到线，取最近（下边界最大）的那个。
+    # 整体判定的失败模式见 _connected_regions 的注释（黄牌会把真线拽歪）。
+    roi_w, roi_h = crop.shape[1], crop.shape[0]
+    best_metrics = None
+    best_bottom = -1
+    for x0r, x1r, y0r, y1r, _npx in _connected_regions(mask):
+        rys, rxs = np.nonzero(mask[y0r:y1r + 1, x0r:x1r + 1])
+        metrics = _shape_metrics(rxs, rys, roi_w, roi_h)
+        if not _shape_ok(metrics, shape):
+            continue
+        if y1r > best_bottom:
+            best_bottom, best_metrics = y1r, metrics
+
+    if best_metrics is not None:
+        # row 取通过区域的下边界：越靠近机器人越大，语义与旧版一致。
+        row = (y0 + best_bottom + 1) / float(full_h)
+        return StopLineState(True, row, ts, ratio, bbox, best_metrics["angle"])
+
+    # 通路 B：有若干行连续黄色接近全宽。障碍物与停止线在图像里粘连时，
+    # 两者的点云连成一片，A 通路会被拽到伸长比 4 左右而漏检 —— 此时只能
+    # 按行看。row 用整体底边，宁可提前一点停车，也不能冲过路口。
+    if _full_rows(mask, roi_w, float(shape.get("full_row_frac", 0.8))) >= int(
+        shape.get("full_rows_min", 3)
+    ):
+        metrics = _shape_metrics(xs, ys, roi_w, roi_h)
+        row = (y0 + int(ys.max()) + 1) / float(full_h)
+        return StopLineState(
+            True, row, ts, ratio, bbox, metrics["angle"] if metrics else 0.0
+        )
+
+    # 拒绝时 row 仍给 0.0：下游 _line_fresh 会先判 visible，但这里不向
+    # 下游暗示「黄色就在眼前」。area_ratio / bbox / angle 照常返回，
+    # 现场日志可据此区分「没有黄色像素」与「有黄色但不像停止线」——
+    # 这正是排查误检需要的信息。
+    metrics = _shape_metrics(xs, ys, roi_w, roi_h)
+    return StopLineState(
+        False, 0.0, ts, ratio, bbox, metrics["angle"] if metrics else 0.0
+    )
 
 
 class StopLineVoter:

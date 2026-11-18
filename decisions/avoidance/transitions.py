@@ -4,7 +4,7 @@ import math
 
 from decisions.types import BLOCKED, HOLD, StepContext, StepResult
 from decisions.rules import wrap_pi
-from messages import ActionRequest, Perception, VoiceCue
+from messages import ActionRequest, Perception, Pose, VoiceCue
 
 
 class TransitionMixin:
@@ -106,13 +106,24 @@ class TransitionMixin:
         return self.actions.stop()
 
 
-    def _history_append(self, now: float, perception: Perception):
+    def _history_append(self, now: float, perception: Perception,
+                        pose: Pose | None = None):
         # 只统计不同相机帧，不把 50Hz 重复读取同一帧算成稳定证据。
         if self.last_history_frame_ts is not None and perception.ts <= self.last_history_frame_ts:
             return
         self.last_history_frame_ts = perception.ts
+        if not self.history:
+            # 历史被清空（刚进 HOLD/BLOCKED）后的第一帧：从这里开始算"停稳"
+            self.hold_clean_ts = now
+        if perception.valid:
+            self.last_valid_m = perception.distance_m
+            self.invalid_since = 0.0
+            self.recover_attempts = 0
+        # 同时记录自车位置：判定"障碍在接近"时必须扣掉机器人自己走过去的那部分距离。
+        x = pose.x if pose is not None else float("nan")
+        y = pose.y if pose is not None else float("nan")
         self.history.append(
-            (now, perception.distance_m, perception.near_ratio, perception.valid)
+            (now, perception.distance_m, perception.near_ratio, perception.valid, x, y)
         )
         cutoff = now - max(self.cfg.confirm_s, self.cfg.blocked_recheck_s) * 2.0 - 1.0
         while self.history and self.history[0][0] < cutoff:
@@ -131,18 +142,18 @@ class TransitionMixin:
 
 
     def _stable_clear_for(self, now: float, duration: float) -> bool:
-        window = self._window(now, duration)
-        if len(window) < 3:
+        # 深度只有 2~3FPS：0.5s 窗口常常只有 1 帧，原来 len<3 会让状态机永远卡在 HOLD
+        window = self._window(now, max(duration, 1.2))
+        if len(window) < 2:
             return False
         if now - window[0][0] < duration:
             return False
-        return all(valid and center >= self.cfg.clear_m
-                   for _, center, _, valid in window)
+        return all(h[3] and h[1] >= self.cfg.clear_m for h in window)
 
 
     def _stable_obstacle(self, now: float) -> bool:
-        window = self._window(now, self.cfg.confirm_s)
-        if len(window) < 3:
+        window = self._window(now, max(self.cfg.confirm_s, 1.2))
+        if len(window) < 2:
             return False
         if now - window[0][0] < self.cfg.confirm_s:
             return False
@@ -158,12 +169,42 @@ class TransitionMixin:
 
 
     def _is_approaching(self, now: float) -> bool:
-        window = self._window(now, self.cfg.confirm_s)
-        if len(window) < 3:
+        """判定障碍是否真的在靠近（而不是机器人自己走过去/深度噪声）。
+
+        1) 只取有效帧，且窗口必须覆盖 confirm_s、帧数达标；
+        2) 扣掉窗口内机器人自身位移（里程计 x/y），剩下的缩短量才算"它在动"；
+        3) 连续 approach_confirm_n 次命中才成立，避免单帧跳变。
+        """
+        # 深度相机实测 2~8FPS，窗口放宽到 1.5s、跨度≥0.8s，才能拿到≥3个真帧
+        # 刚停车的 1.2s 内机器人还在滑行，距离缩短是它自己造成的，不能算动态
+        if now - self.hold_clean_ts < self.cfg.approach_settle_s:
+            self.dynamic_hits = 0
             return False
-        first = window[0][1]
-        last = window[-1][1]
-        return last < self.cfg.approach_m and (first - last) > 0.15
+
+        window = self._window(now, 1.5)
+        need = max(3, self.cfg.approach_min_frames)
+        samples = [h for h in window if h[3]]
+        if len(samples) < need or now - samples[0][0] < 0.8:
+            self.dynamic_hits = 0
+            return False
+
+        first, last = samples[0], samples[-1]
+        drop = first[1] - last[1]
+
+        ego = 0.0
+        if math.isfinite(first[4]) and math.isfinite(first[5]) \
+                and math.isfinite(last[4]) and math.isfinite(last[5]):
+            ego = math.hypot(last[4] - first[4], last[5] - first[5])
+        ego = max(0.0, ego - self.cfg.approach_ego_tol_m)
+
+        closing = drop - ego
+        self.last_approach_info = (closing, ego)
+
+        hit = last[1] < self.cfg.approach_m and closing > self.cfg.approach_drop_m
+        self.dynamic_hits = self.dynamic_hits + 1 if hit else 0
+        if self.dynamic_hits >= self.cfg.approach_confirm_n:
+            self.dynamic_until = now + 0.5
+        return bool(hit or now < self.dynamic_until)
 
 
     def _warn(self, now: float, message: str) -> str | None:
@@ -178,7 +219,7 @@ class TransitionMixin:
         if self.blocked_latched:
             return self._stop_result(BLOCKED, ctx.now)
         if ctx.valid:
-            self._history_append(ctx.now, ctx.perception)
+            self._history_append(ctx.now, ctx.perception, ctx.pose)
             if (
                 self._stable_clear_for(ctx.now, self.cfg.blocked_recheck_s)
                 and ctx.perception.min_m >= self.cfg.rotate_clear_m

@@ -15,7 +15,8 @@
 | 左/右大于等于 60° 绕行 | `bypass_left_front.wav` / `bypass_right_front.wav` |
 | 绕行完成 | `bypass_done.wav` |
 | 动态障碍 | `dynamic.wav` |
-| 开始盲道 | `lane.wav`（女声“继续前进。”） |
+| 开始盲道 | `lane.wav`（女声“已识别前方盲道，请跟随我。”） |
+| 盲道停车呼救 | `help.wav`（女声“快来人，帮帮我，快来人，帮帮我”） |
 | 红灯/黄灯/绿灯 | `traffic_red.wav` / `traffic_yellow.wav` / `traffic_green.wav` |
 | 具体停止原因 | `blocked_<reason>.wav` |
 | 等待原因 | `wait_<reason>.wav` |
@@ -32,7 +33,7 @@ python3 tools/voice_generate.py --force
 ```
 
 默认语速为 `+0%`；可以加 `--rate +10%` 让播报更短。  
-生成后请重新运行 `python3 tools/selftest.py`，确认全部短句都存在（当前 37 条）。
+生成后请重新运行 `python3 tools/selftest.py`，确认全部短句都存在（当前 38 条）。
 
 ## 导盲提示用语
 

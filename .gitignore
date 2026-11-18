@@ -12,3 +12,8 @@ install/
 log/
 dist/
 *.egg-info/
+
+# 本地上传/临时文件
+.Trash-0/
+*.mp4
+.pushkey/

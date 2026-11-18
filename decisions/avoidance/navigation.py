@@ -11,14 +11,61 @@ class NavigationMixin:
     def _reset_navigation(self):
         self.bypass_started_ts = None
         self.bypass_side = None
+        self.alternate_side_available = False
+        self.probing_side = False
         self.replans = 0
         self.diagonal_remaining = 0.0
         self.parallel_remaining = 0.0
+        self.bypass_lateral_target = 0.0
+        self.bypass_lateral_sign = 0.0
+        self.lateral_retries = 0
         self.replan_after_realign = False
         self.return_blocked = False
         self.blocked_latched = False
         self.last_history_frame_ts = None
         self.return_clear_origin = None
+
+    # ------------------------------------------------------------ 侧向偏移几何
+    def _diagonal_from_lateral(self, lateral: float) -> float:
+        """由横向偏移目标反算斜向路径长度：lateral / sin(转角)。"""
+        angle = float(self.cfg.bypass_angle_deg)
+        sin_a = max(0.1, math.sin(math.radians(angle)))
+        return max(float(self.cfg.bypass_step_min_m), float(lateral) / sin_a)
+
+    def _bypass_lateral_target(self, perception, side: str) -> float:
+        """绕行需要达到的横向偏移：覆盖机身、障碍与净空，并受该侧实测空间约束。
+
+        旧实现把斜向长度固定为 0.7m，横向只有 0.495m；对 0.5m 宽的障碍，
+        扣掉机身半宽后余量不足 0.07m，只能贴着擦过去，障碍再宽就会撞上。
+        """
+        cfg = self.cfg
+        needed = (float(cfg.body_half_width_m)
+                  + float(cfg.obstacle_half_width_m)
+                  + float(cfg.bypass_side_clearance_m))
+        if perception is not None and perception.near_ratio >= cfg.wall_near_ratio:
+            needed += float(cfg.wall_extra_m)
+        floor = float(cfg.bypass_lateral_min_m)
+        if perception is None:
+            return max(needed, floor)
+        space = perception.left_m if side == "left" else perception.right_m
+        if not math.isfinite(space):
+            return max(needed, floor)
+        usable = float(space) - float(cfg.body_half_width_m) - float(cfg.bypass_side_clearance_m)
+        if usable <= floor:
+            # 侧向空间只够勉强通过：按实测空间给，不再加码，避免越到另一侧。
+            return max(float(cfg.bypass_step_min_m), usable)
+        return min(needed, usable)
+
+    def _lateral_shortfall(self, pose) -> float | None:
+        """实测横向偏移与目标的差额；换不到位姿或方向不符时返回 None。"""
+        target = float(getattr(self, "bypass_lateral_target", 0.0) or 0.0)
+        sign = float(getattr(self, "bypass_lateral_sign", 0.0) or 0.0)
+        if target <= 0.0 or sign == 0.0:
+            return None
+        lateral = self._path_lateral(pose)
+        if lateral is None or lateral * sign < 0:
+            return None
+        return max(0.0, target - abs(lateral))
 
     def _pose_valid(self, pose, now):
         return (pose is not None

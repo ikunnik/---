@@ -36,6 +36,7 @@ DEFAULT_VOICE = "zh-CN-XiaoxiaoNeural"
 def all_cues() -> list[VoiceCue]:
     cues = [
         VoiceCue("lane"),
+        VoiceCue("help"),
         VoiceCue("bypass", side="left", angle_deg=30),
         VoiceCue("bypass", side="left", angle_deg=60),
         VoiceCue("bypass", side="right", angle_deg=30),

@@ -42,7 +42,7 @@ class MangdaoTests(unittest.TestCase):
                                                        traffic_light_enabled=True))
         self.assertTrue(cfg.lane_follow_enabled)
         self.assertFalse(cfg.stop_line_enabled or cfg.traffic_light_enabled or cfg.traffic_sequence_enabled)
-        self.assertEqual((cfg.lane_loop_update_threshold,cfg.lane_loop_min_update_s),(.12,2.5))
+        self.assertEqual((cfg.lane_loop_update_threshold,cfg.lane_loop_min_update_s),(.02,.22))
         self.assertTrue(cfg.lane_no_line_straight)
 
     def test_default_traffic_and_plain_avoidance_are_preserved(self):
@@ -141,16 +141,21 @@ class MangdaoTests(unittest.TestCase):
         initial=tick(100)
         self.assertTrue(initial.request.cmd.loop)
         self.assertEqual(len(initial.request.cmd.steps),2)
+        # 偏差跳变后不能在最小间隔内反复打断执行器
+        self.assertTrue(all(tick(100+i*.025,.9).request is None for i in range(1,9)))
         replan=None
         for i in range(1,151):
             t=100+i*.025
             out=tick(t,.9)
             if out.request is not None:
                 replan=out
-                self.assertGreaterEqual(t-100,2.5)
+                self.assertGreaterEqual(t-100,CFG.lane_loop_min_update_s)
                 break
         self.assertIsNotNone(replan)
         self.assertTrue(replan.interrupt and replan.request.cmd.loop)
+        # 重发必须是"从当前执行值渐变"，不是一步跳到目标值
+        self.assertLess(abs(replan.request.cmd.steps[0].vyaw-initial.request.cmd.steps[0].vyaw),.12)
+        self.assertLess(replan.request.cmd.steps[0].vyaw,0.0)   # center 偏右 -> 右转(负角速度)
         failed=CommandResult(1,replan.request.cmd.tag,'cancelled',ts=t+.01)
         stopped=tick(t+.02,.9,failed)
         self.assertTrue(stopped.interrupt)

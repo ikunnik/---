@@ -4,16 +4,19 @@
 单位约定：
     距离 = 米(m)      时间 = 秒(s)      频率 = 赫兹(Hz)      角度 = 度(deg)
 """
+import os
 from dataclasses import dataclass
+
+# 项目根目录（配置里的相对路径都以它为基准）
+_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 @dataclass(frozen=True)
 class Config:
     # ---------------- 网络 / 设备 ----------------
     robot_ip: str = "192.168.5.2:50051"
-    dds_config: str = (
-        "/home/admin/dobot/dobot_quad_sdk-main/low_level/python/config/dds_config.yaml"
-    )
+    # DDS QoS 配置：用项目内自带副本，不依赖 SDK 安装位置
+    dds_config: str = os.path.join(_BASE_DIR, "assets", "dds_config.yaml")
     # CYCLONEDDS_URI 缺 EnableTopicDiscoveryEndpoints 时，改用这个文件（存在才用）
     dds_uri_file: str = "~/dobot_quad_sdk-main/cyclonedds.xml"
     # 运动后端：sdk=gRPC 50051（默认）；ros2=/planner/vel_cmd（实时运动）
@@ -58,17 +61,17 @@ class Config:
     lane_control_duration_s: float = 1.20  # 单段速度目标时长；太短会频繁启停，太长则纠偏更新慢
     lane_trial_seconds: float = 0.0  # 盲道最长运行时间；0=不限时，持续运行
     lane_batch_steps: int = 2               # 循环序列内两个速度步骤
-    lane_loop_update_threshold: float = 0.12 # yaw 变化超过此值才重新发指令
-    lane_loop_min_update_s: float = 2.5     # 避免频繁打断导致再次顿挫
+    lane_loop_update_threshold: float = 0.02 # yaw 变化超过此值才重新发指令；0.12 等于 33cm/10° 死区
+    lane_loop_min_update_s: float = 0.22     # 重发最小间隔；纠偏环 0.4rad/s，间隔过长等于开环
     lane_loop_heartbeat_timeout_s: float = 1.0  # 决策线程失活，执行器主动取消+刹车
     lane_min_confidence: float = 0.15
-    lane_filter_alpha: float = 0.25        # 感知误差 EMA 系数
-    lane_cross_deadband: float = 0.018     # 归一化中心误差死区
+    lane_filter_alpha: float = 0.5         # 按检测帧的测量 EMA 系数（8FPS 下 0.25 太滞后）
+    lane_cross_deadband: float = 0.008     # 归一化中心误差死区；0.018 相当于允许 6° 航向偏
     lane_heading_weight: float = 0.08      # heading 归一化后加入横向误差
     lane_kp: float = 0.80                 # (rad/s) / 归一化误差
     lane_kd: float = 0.02                 # 对误差变化率的阻尼系数
     lane_max_yaw_rate: float = 0.18       # rad/s，转向速度限幅
-    lane_yaw_accel_limit: float = 0.12    # rad/s^2，转向速度变化率限制
+    lane_yaw_accel_limit: float = 0.30    # rad/s^2，相对已下发角速度的变化率限制
     lane_max_center_jump: float = 0.06
     lane_max_heading_jump_deg: float = 6.0
     lane_steer_sign: float = -1.0         # 保留原项目方向约定；首次实机低速验证正负方向
@@ -76,7 +79,7 @@ class Config:
     lane_reacquire_enabled: bool = True  # 丢线后按最后线侧搜索一下
     lane_reacquire_yaw_rate: float = 0.12
     lane_reacquire_seconds: float = 3.0
-    stop_line_stale_s: float = 0.5        # 停止线状态超过这个时间未更新就算过期
+    stop_line_stale_s: float = 1.5        # 停止线只有 2~3FPS，0.5s 会反复误判"失效"（同 lane 的教训）
     # 启动握手：子进程订阅成功 / 收到第一帧的最长等待时间。超时说明 DDS
     # 初始化卡住或话题没有数据；--traffic-sequence 会直接中止，绝不带着
     # 失效的检测器前进。
@@ -114,7 +117,7 @@ class Config:
     pose_cache_s: float = 0.05                            # 姿态缓存 50ms，避免 50Hz 打爆 RPC
 
     # ---------------- 感知 ----------------
-    danger_m: float = 0.7        # 危险线：低于它就停车并避障
+    danger_m: float = 0.85       # 危险线：低于它就停车并避障（0.5 太晚，会滑到 0.4m 内导致深度失效）
     clear_m: float = 1.0         # 允许前进 / 回正的最小中心距离
     stale_s: float = 0.5         # 多久没收到感知就认为失效
     min_valid_pixels: int = 50   # 中心 ROI 内有效像素少于这个数 → 判定无效
@@ -173,13 +176,25 @@ class Config:
     # ---------------- 自动避障 ----------------
     max_heading_dev: float = 90.0   # 单次避障允许偏离 entry_yaw 的最大角度
     min_passage_m: float = 0.70     # 候选方向的最低空间
+    bypass_side_tie_m: float = 0.15  # 首次选边时，两侧都合格且差值在此范围内优先左绕
     wall_near_ratio: float = 0.60   # 中心近处占比高于它 → 当成整面墙，要求更宽侧向空间
-    wall_extra_m: float = 0.20      # 墙面情况下额外要求的侧向空间
+    wall_extra_m: float = 0.12      # 墙面情况下额外要求的侧向空间（场地窄，0.20 太宽）
     rotate_clear_m: float = 0.20    # 原地转身需要的最小净空
     safety_buffer_m: float = 0.10   # 动态步长保留的安全余量
+    # 侧向偏移：绕障的横向位移必须覆盖“机身半宽 + 障碍半宽 + 净空”，
+    # 斜向长度由该目标反算（lateral/sin 角度），不再使用固定 0.7m。
+    body_half_width_m: float = 0.18     # 机身半宽（含步态横向摆动）
+    obstacle_half_width_m: float = 0.15 # 未测到障碍宽度时按 0.3m 宽物体估算（0.25 太保守，侧向绕太远）
+    bypass_side_clearance_m: float = 0.10  # 绕行时与障碍侧面保留的净空（场地窄，0.15 太宽）
+    bypass_lateral_min_m: float = 0.35     # 侧向空间紧张时允许的最小横向偏移
+    bypass_lateral_verify_m: float = 0.10  # 容差太小会反复补斜向段，越绕越远
+    bypass_lateral_max_retry: int = 2      # 横向不足时最多补几段斜向
+    # 斜向转角：45° 时斜向航段本身就是朝障碍前角切过去的，横向加长也擦角；
+    # 60° 把同样的横向偏移压缩到更短的前进量，离前角更远。
+    bypass_angle_deg: float = 40.0    # 绕障固定转角（60° 太大，绕出去离原路线太远）
     max_avoid_cycles: int = 24       # 单次绕障的距离动作上限（含回切与中断）
-    max_bypass_distance_m: float = 6.0  # 单次绕障累计实际路程上限，包含回切
-    min_bypass_advance_m: float = 0.80  # 回正后并肩前进的初始目标距离，净空足够时一次执行
+    max_bypass_distance_m: float = 6.0  # 单次绕障累计实际路程上限，包含回切（3.0 会卡在长障碍中途锁死）
+    min_bypass_advance_m: float = 0.30  # 回正后并肩前进的初始目标距离（场地短，走多会越过停止线）
     bypass_step_max_m: float = 0.40      # 旧配置兼容保留；绕障不再使用固定分段上限
     bypass_step_min_m: float = 0.10
     bypass_timeout_s: float = 120.0     # 包括等待/播报/重规划的总时限
@@ -187,18 +202,27 @@ class Config:
     bypass_pose_stale_s: float = 0.50
     bypass_min_progress_ratio: float = 0.50  # 成功回执仍需实测位移验证
     path_return_enabled: bool = True     # 绕障后横向绕回原路线
-    path_return_tolerance_m: float = 0.12  # 横向误差小于它认为已回到原路线
-    path_return_angle_deg: float = 60.0  # 绕回时的切入角
-    path_return_clearance_m: float = 0.40  # 回切侧清空后再沿原方向确认越过拐角
+    path_return_tolerance_m: float = 0.16  # 容差大一点就少走几段回线
+    path_return_angle_deg: float = 40.0  # 绕回时的切入角（与绕出角一致，横移少）
+    path_return_clearance_m: float = 0.25  # 回切侧清空后再沿原方向确认越过拐角
     path_return_min_step_m: float = 0.10
     path_return_max_step_m: float = 1.50
     path_return_max_attempts: int = 6
     max_realign_attempts: int = 12   # 单次绕障回正次数上限（含受阻回切）
     settle_s: float = 0.25          # 动作结束后等新帧的时间
     confirm_s: float = 0.50         # 障碍/安全状态稳定确认时间
-    stable_delta_m: float = 0.05    # 中心距离波动上限
+    stable_delta_m: float = 0.08    # 中心距离波动上限（深度只有 2~3FPS，0.05 太严会永远"不稳定"）
     stable_near_delta: float = 0.05 # near_ratio 波动上限
     approach_m: float = 1.20        # 距离持续减小且低于它 → 判定为接近中的动态障碍
+    approach_drop_m: float = 0.15   # 扣除自车位移后仍缩短这么多才算真的在被逼近
+    approach_ego_tol_m: float = 0.06
+    approach_min_frames: int = 3
+    approach_confirm_n: int = 2
+    approach_settle_s: float = 3.0  # 刚停车这段是自己在滑行（实测要 1.5s），这里给足 3s
+    perception_recover_s: float = 1.5
+    perception_recover_attempts: int = 3
+    recover_backoff_m: float = 0.90
+    recover_backoff_step_m: float = 0.25
     turn_timeout_s: float = 5.0     # 转身超时
     step_timeout_s: float = 3.0     # 短距离前进超时
     realign_timeout_s: float = 5.0  # 回正超时

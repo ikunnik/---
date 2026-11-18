@@ -9,10 +9,9 @@ from messages import VoiceCue
 class HoldMixin:
     def _step_hold(self, ctx: StepContext) -> StepResult:
         if not ctx.valid:
-            self.history.clear()
-            return self._stop_result(HOLD, ctx.now)
+            return self._recover_perception(ctx)
 
-        self._history_append(ctx.now, ctx.perception)
+        self._history_append(ctx.now, ctx.perception, ctx.pose)
 
         captured = self._hold_capture_entry_yaw(ctx)
         if captured is not None:
@@ -23,6 +22,43 @@ class HoldMixin:
         if ctx.perception.distance_m < self.cfg.danger_m:
             return self._hold_when_dangerous(ctx)
         return self._hold_in_buffer_zone(ctx)
+
+
+    def _recover_perception(self, ctx: StepContext) -> StepResult:
+        """深度无有效数据：先停车等一会，再小步后退重新取景，最后才锁定。
+
+        贴障碍太近时深度图会整片无效（近于量程），机器人会卡死在原地；
+        后退 0.25m 一般就能重新拿到数据。
+        """
+        now = ctx.now
+        if self.invalid_since <= 0.0:
+            self.invalid_since = now
+            self.history.clear()
+        if now - self.invalid_since < self.cfg.perception_recover_s:
+            return self._stop_result(HOLD, now)
+
+        if (self.recover_attempts < self.cfg.perception_recover_attempts
+                and self.last_valid_m < self.cfg.recover_backoff_m):
+            self.recover_attempts += 1
+            self.invalid_since = now
+            step = self.cfg.recover_backoff_step_m
+            log = (
+                f"感知无数据，后退 {step:.2f}m 重新取景"
+                f"（第 {self.recover_attempts}/{self.cfg.perception_recover_attempts} 次，"
+                f"上次有效 {self.last_valid_m:.2f}m）"
+            )
+            return StepResult(
+                HOLD,
+                self.actions.move("backward", step, purpose="感知恢复后退"),
+                log=log,
+            )
+
+        return self._block(
+            now,
+            "深度相机持续无有效数据，无法避障",
+            interrupt=True,
+            reason="no_depth",
+        )
 
 
     def _hold_capture_entry_yaw(self, ctx: StepContext) -> StepResult | None:
@@ -166,7 +202,11 @@ class HoldMixin:
     def _dynamic_wait(self, ctx: StepContext) -> StepResult:
         return self._stop_result(
             HOLD, ctx.now,
-            self._warn(ctx.now, "障碍物正在接近，停车等待"),
+            self._warn(
+                ctx.now,
+                "障碍物判定为动态接近（扣除自车位移后仍缩短 %.2fm，自车 %.2fm），停车等待"
+                % self.last_approach_info,
+            ),
             voice=self.voice.announce(VoiceCue("dynamic"), ctx.now),
         )
 

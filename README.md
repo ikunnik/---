@@ -672,8 +672,8 @@ BYPASS_DIAGONAL_M = 0.8
 | `lane_forward_vx` | 0.40 | 盲道及无盲道直行速度 m/s |
 | `lane_control_duration_s` | 1.20 | 循环序列内每步时长 |
 | `lane_batch_steps` | 2 | 循环序列内步数 |
-| `lane_loop_update_threshold` | 0.12 | 转向目标更新阈值 rad/s |
-| `lane_loop_min_update_s` | 2.5 | 重新规划最小间隔 |
+| `lane_loop_update_threshold` | 0.02 | 转向目标更新阈值 rad/s（0.12 等于 33cm/10° 死区） |
+| `lane_loop_min_update_s` | 0.22 | 重新规划最小间隔 s（纠偏环 0.4rad/s，间隔过长等于开环走斜） |
 | `lane_loop_heartbeat_timeout_s` | 1.0 | 决策心跳超时停车 |
 | `lane_trial_seconds` | 0.0 | 盲道运行时限；0=不限时持续运行 |
 | `lane_no_line_straight` | True | 新鲜图像无盲道时直行 |

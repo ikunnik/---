@@ -116,6 +116,22 @@ class DecisionTests(unittest.TestCase):
         self.assertFalse(engine.lane.trial_finished)
         self.assertIsNone(engine.terminal_status)
 
+    def test_lane_recognition_then_help_stop_after_delay(self):
+        engine = self.engine(lane_follow=True)
+        line = LaneState(True, center=.5, ts=100, confidence=.9)
+        first = engine.evaluate(self.snapshot(100, lane=line))
+        self.assertEqual([n.kind for n in first.notices], ['lane'])
+        self.assertEqual(first.step.state, 'LANE_VELOCITY')
+        walking = engine.evaluate(self.snapshot(101.0, lane=replace(line, ts=101.0)))
+        self.assertEqual(walking.notices, ())
+        help_out = engine.evaluate(self.snapshot(102.1, lane=replace(line, ts=102.1)))
+        self.assertEqual([n.kind for n in help_out.notices], ['help'])
+        self.assert_stop(help_out)
+        self.assertTrue(help_out.step.interrupt)
+        again = engine.evaluate(self.snapshot(103.0, lane=replace(line, ts=103.0)))
+        self.assertEqual(again.notices, ())
+        self.assertEqual(again.step.state, 'LANE_STOP')
+
     def test_missing_stop_line_blocks_normal_forward_then_recovers_when_healthy(self):
         engine = self.engine(traffic_sequence=True)
         out = engine.evaluate(self.snapshot(line=None, line_ts=0, executor_busy=True))

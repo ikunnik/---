@@ -6,10 +6,15 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from actions import MAX_DISTANCE
-from decisions.avoidance.constants import (
-    BYPASS_ANGLE_DEG, BYPASS_DIAGONAL_M, BYPASS_PARALLEL_M,
-)
+from decisions.avoidance.constants import BYPASS_ANGLE_DEG, BYPASS_PARALLEL_M
 from tools.selftest import PureSim, fast_cfg, scene, GO, BLOCKED
+
+
+def expected_diagonal(cfg):
+    """斜向长度由横向偏移目标反算：lateral / sin(转角)。"""
+    needed = (cfg.body_half_width_m + cfg.obstacle_half_width_m
+              + cfg.bypass_side_clearance_m)
+    return needed / math.sin(math.radians(cfg.bypass_angle_deg))
 
 
 class BypassTests(unittest.TestCase):
@@ -53,9 +58,10 @@ class BypassTests(unittest.TestCase):
                         break
                 self.assertEqual(sim.sm.phase, GO)
                 self.assertGreater(len(advances), 2)
-                self.assertAlmostEqual(advances[0], BYPASS_DIAGONAL_M)
+                diagonal = expected_diagonal(cfg)
+                self.assertAlmostEqual(advances[0], diagonal, places=6)
                 self.assertTrue(any(abs(d - cfg.min_bypass_advance_m) < 1e-8 for d in advances))
-                self.assertGreater(sum(advances), BYPASS_DIAGONAL_M + cfg.min_bypass_advance_m)
+                self.assertGreater(sum(advances), diagonal + cfg.min_bypass_advance_m)
                 self.assertLessEqual(abs(sim.y), cfg.path_return_tolerance_m)
                 self.assertLess(abs(math.degrees(sim.yaw)), 2)
 

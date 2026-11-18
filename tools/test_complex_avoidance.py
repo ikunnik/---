@@ -250,20 +250,23 @@ class ComplexAvoidanceTests(unittest.TestCase):
                         self.assertEqual(out.state, BLOCKED)
 
     def test_return_clearance_requires_measured_forward_progress(self):
+        clearance = CFG.path_return_clearance_m
         sm = anchored()
         sm.return_clear_origin = None
         first = sm._maybe_start_path_return(context())
         self.assertEqual(first.request.kind, 'advance')
         self.assertEqual(sm.path_return_attempts, 0)
         sm.pending = None
-        # 下发过0.4m不代表走够；实测只前进0.2m时仍不能回切。
-        halfway = sm._maybe_start_path_return(context(now=101, x=0.2))
+        # 下发过全程不代表走够；只走一半时仍不能回切。
+        halfway = sm._maybe_start_path_return(context(now=101, x=clearance / 2))
         self.assertEqual(halfway.request.kind, 'advance')
-        self.assertAlmostEqual(dict(halfway.request.cmd.params)['distance'], 0.2)
+        self.assertAlmostEqual(dict(halfway.request.cmd.params)['distance'],
+                               clearance / 2)
         sm.pending = None
-        ready = sm._maybe_start_path_return(context(now=102, x=0.4))
+        ready = sm._maybe_start_path_return(context(now=102, x=clearance))
         self.assertEqual(ready.request.kind, 'turn')
-        self.assertAlmostEqual(dict(ready.request.cmd.params)['angle'], 60)
+        self.assertAlmostEqual(dict(ready.request.cmd.params)['angle'],
+                               CFG.path_return_angle_deg)
 
     def test_obstructed_return_side_resets_clearance_confirmation(self):
         sm = anchored()
